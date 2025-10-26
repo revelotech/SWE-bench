@@ -467,6 +467,88 @@ def build_instance_image(
         close_logger(logger)
 
 
+def build_custom_instance_image(
+    test_spec: TestSpec,
+    client: docker.DockerClient,
+    logger: logging.Logger | None,
+    nocache: bool,
+):
+    """
+    Builds the instance image from a custom dockerfile field in the test spec.
+
+    Args:
+        test_spec (TestSpec): Test spec containing the custom dockerfile
+        client (docker.DockerClient): Docker client to use for building the image
+        logger (logging.Logger): Logger to use for logging the build process
+        nocache (bool): Whether to use the cache when building
+    """
+    if not test_spec.dockerfile:
+        raise BuildImageError(
+            test_spec.instance_id,
+            "No dockerfile provided for custom image build",
+            logger,
+        )
+    
+    # Set up logging for the build process
+    build_dir = INSTANCE_IMAGE_BUILD_DIR / test_spec.instance_image_key.replace(":", "__")
+    new_logger = False
+    if logger is None:
+        new_logger = True
+        logger = setup_logger(test_spec.instance_id, build_dir / "prepare_image.log")
+
+    # Get the image name and dockerfile for the instance image
+    image_name = test_spec.instance_image_key
+    dockerfile = test_spec.dockerfile
+
+    logger.info(f"Building custom instance image {image_name} for {test_spec.instance_id} from dockerfile")
+
+    # Create build directory
+    build_dir.mkdir(parents=True, exist_ok=True)
+
+    # Write the dockerfile to the build directory
+    dockerfile_path = build_dir / "Dockerfile"
+    with open(dockerfile_path, "w") as f:
+        f.write(dockerfile)
+
+    try:
+        # Build the image
+        logger.info(f"Building docker image {image_name} in {build_dir}")
+        response = client.api.build(
+            path=str(build_dir),
+            tag=image_name,
+            rm=True,
+            forcerm=True,
+            decode=True,
+            platform=test_spec.platform,
+            nocache=nocache,
+        )
+
+        # Log the build process continuously
+        buildlog = ""
+        for chunk in response:
+            if "stream" in chunk:
+                # Remove ANSI escape sequences from the log
+                chunk_stream = ansi_escape(chunk["stream"])
+                logger.info(chunk_stream.strip())
+                buildlog += chunk_stream
+            elif "errorDetail" in chunk:
+                # Decode error message, raise BuildError
+                logger.error(f"Error: {ansi_escape(chunk['errorDetail']['message'])}")
+                raise docker.errors.BuildError(
+                    chunk["errorDetail"]["message"], buildlog
+                )
+        logger.info("Custom image built successfully!")
+    except docker.errors.BuildError as e:
+        logger.error(f"docker.errors.BuildError during {image_name}: {e}")
+        raise BuildImageError(image_name, str(e), logger) from e
+    except Exception as e:
+        logger.error(f"Error building custom image {image_name}: {e}")
+        raise BuildImageError(image_name, str(e), logger) from e
+    finally:
+        if new_logger:
+            close_logger(logger)
+
+
 def build_container(
     test_spec: TestSpec,
     client: docker.DockerClient,
@@ -489,7 +571,33 @@ def build_container(
     # Build corresponding instance image
     if force_rebuild:
         remove_image(client, test_spec.instance_image_key, "quiet")
-    if not test_spec.is_remote_image:
+    
+    # Check if we have a custom docker_image field
+    if test_spec.docker_image:
+        logger.info(f"Using custom docker image: {test_spec.docker_image}")
+        try:
+            # Try to pull the custom docker image
+            client.images.pull(test_spec.docker_image)
+            # Tag it with the expected instance image key
+            image = client.images.get(test_spec.docker_image)
+            image.tag(test_spec.instance_image_key)
+            logger.info(f"Successfully pulled and tagged custom image: {test_spec.docker_image} -> {test_spec.instance_image_key}")
+                
+        except docker.errors.NotFound as e:
+            logger.warning(f"Failed to pull custom docker image {test_spec.docker_image}: {e}")
+            if test_spec.dockerfile:
+                logger.info(f"Falling back to building from dockerfile for {test_spec.instance_id}")
+                build_custom_instance_image(test_spec, client, logger, nocache)
+            else:
+                raise BuildImageError(test_spec.instance_id, f"Custom docker image {test_spec.docker_image} not found and no dockerfile provided", logger) from e
+        except Exception as e:
+            logger.warning(f"Error pulling custom docker image {test_spec.docker_image}: {e}")
+            if test_spec.dockerfile:
+                logger.info(f"Falling back to building from dockerfile for {test_spec.instance_id}")
+                build_custom_instance_image(test_spec, client, logger, nocache)
+            else:
+                raise BuildImageError(test_spec.instance_id, f"Custom docker image {test_spec.docker_image} pull failed and no dockerfile provided: {str(e)}", logger) from e
+    elif not test_spec.is_remote_image:
         build_instance_image(test_spec, client, logger, nocache)
     else:
         try:
@@ -506,6 +614,16 @@ def build_container(
 
     container = None
     try:
+        # Check if a container with the same name already exists and remove it
+        container_name = test_spec.get_instance_container_name(run_id)
+        try:
+            existing_container = client.containers.get(container_name)
+            logger.info(f"Found existing container {container_name}, removing it...")
+            cleanup_container(client, existing_container, logger)
+        except docker.errors.NotFound:
+            # Container doesn't exist, which is fine
+            pass
+
         # Create the container
         logger.info(f"Creating container for {test_spec.instance_id}...")
 
@@ -515,7 +633,7 @@ def build_container(
 
         container = client.containers.create(
             image=test_spec.instance_image_key,
-            name=test_spec.get_instance_container_name(run_id),
+            name=container_name,
             user=DOCKER_USER,
             detach=True,
             command="tail -f /dev/null",
