@@ -45,6 +45,11 @@ class TestSpec:
     base_image_tag: str = LATEST
     env_image_tag: str = LATEST
     instance_image_tag: str = LATEST
+    docker_image: Optional[str] = None
+    dockerfile: Optional[str] = None
+    test_cmds: Optional[list[str]] = None
+    log_parser: Optional[str] = None
+    parser_content: Optional[str] = None
 
     @property
     def setup_env_script(self):
@@ -216,6 +221,14 @@ def make_test_spec(
     eval_script_list = make_eval_script_list(
         instance, specs, env_name, repo_directory, base_commit, test_patch
     )
+    
+    # Extract custom docker fields if present
+    docker_image = instance.get("docker_image")
+    dockerfile = instance.get("dockerfile") or instance.get("DockerFile")  # Handle both cases
+    test_cmds = instance.get("test_cmds")
+    log_parser = instance.get("log_parser")
+    parser_content = instance.get("parser_content")
+    
     return TestSpec(
         instance_id=instance_id,
         repo=repo,
@@ -232,4 +245,9 @@ def make_test_spec(
         base_image_tag=base_image_tag,
         env_image_tag=env_image_tag,
         instance_image_tag=instance_image_tag,
+        docker_image=docker_image,
+        dockerfile=dockerfile,
+        test_cmds=test_cmds,
+        log_parser=log_parser,
+        parser_content=parser_content,
     )
