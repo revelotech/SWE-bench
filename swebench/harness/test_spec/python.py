@@ -229,34 +229,70 @@ def get_requirements(instance: SWEbenchInstance) -> str:
 
 def get_test_directives(instance: SWEbenchInstance) -> list:
     """
-    Get test directives from the test_patch of a task instance
+    Get test directives from FAIL_TO_PASS and PASS_TO_PASS fields of a task instance
 
     Args:
         instance (dict): task instance
     Returns:
         directives (list): List of test directives
     """
+    import json
+    
     # For seq2seq code repos, testing command is fixed
     if instance["repo"] == "swe-bench/humaneval":
         return ["test.py"]
 
-    # Get test directives from test patch and remove non-test files
-    diff_pat = r"diff --git a/.* b/(.*)"
-    test_patch = instance["test_patch"]
-    directives = re.findall(diff_pat, test_patch)
-    directives = [
-        d for d in directives if not any(d.endswith(ext) for ext in NON_TEST_EXTS)
-    ]
+    # Get test directives from FAIL_TO_PASS and PASS_TO_PASS fields
+    directives = []
+    
+    # Helper function to parse test lists (handles both arrays and JSON strings)
+    def parse_test_list(test_field):
+        if not test_field:
+            return []
+        
+        # If it's already a list, return it
+        if isinstance(test_field, list):
+            return test_field
+        
+        # If it's a string, try to parse it as JSON
+        if isinstance(test_field, str):
+            try:
+                return json.loads(test_field)
+            except json.JSONDecodeError:
+                # If JSON parsing fails, treat as a single test name
+                return [test_field]
+        
+        return []
+    
+    # Add tests from FAIL_TO_PASS field
+    if "FAIL_TO_PASS" in instance:
+        fail_to_pass_tests = parse_test_list(instance["FAIL_TO_PASS"])
+        directives.extend(fail_to_pass_tests)
+    
+    # Add tests from PASS_TO_PASS field
+    if "PASS_TO_PASS" in instance:
+        pass_to_pass_tests = parse_test_list(instance["PASS_TO_PASS"])
+        directives.extend(pass_to_pass_tests)
+    
+    # If no tests found in the new fields, fall back to the old method
+    if not directives and "test_patch" in instance:
+        # Get test directives from test patch and remove non-test files
+        diff_pat = r"diff --git a/.* b/(.*)"
+        test_patch = instance["test_patch"]
+        directives = re.findall(diff_pat, test_patch)
+        directives = [
+            d for d in directives if not any(d.endswith(ext) for ext in NON_TEST_EXTS)
+        ]
 
-    # For Django tests, remove extension + "tests/" prefix and convert slashes to dots (module referencing)
-    if instance["repo"] == "django/django":
-        directives_transformed = []
-        for d in directives:
-            d = d[: -len(".py")] if d.endswith(".py") else d
-            d = d[len("tests/") :] if d.startswith("tests/") else d
-            d = d.replace("/", ".")
-            directives_transformed.append(d)
-        directives = directives_transformed
+        # For Django tests, remove extension + "tests/" prefix and convert slashes to dots (module referencing)
+        if instance["repo"] == "django/django":
+            directives_transformed = []
+            for d in directives:
+                d = d[: -len(".py")] if d.endswith(".py") else d
+                d = d[len("tests/") :] if d.startswith("tests/") else d
+                d = d.replace("/", ".")
+                directives_transformed.append(d)
+            directives = directives_transformed
 
     return directives
 
@@ -415,14 +451,26 @@ def make_eval_script_list_py(
     apply_test_patch_command = (
         f"git apply -v - <<'{HEREDOC_DELIMITER}'\n{test_patch}\n{HEREDOC_DELIMITER}"
     )
-    test_command = " ".join(
-        [
-            MAP_REPO_VERSION_TO_SPECS[instance["repo"]][instance["version"]][
-                "test_cmd"
-            ],
-            *get_test_directives(instance),
-        ]
-    )
+    
+    # Use test_cmds from the dataset entry if available, otherwise fall back to the old method
+    if "test_cmds" in instance and instance["test_cmds"]:
+        # Use the test command from the dataset entry - join all commands with &&
+        test_command = " && ".join(instance["test_cmds"])
+        # Add test directives if they exist
+        test_directives = get_test_directives(instance)
+        if test_directives:
+            test_command += " " + " ".join(test_directives)
+    else:
+        # Fall back to the old method
+        test_command = " ".join(
+            [
+                MAP_REPO_VERSION_TO_SPECS[instance["repo"]][instance["version"]][
+                    "test_cmd"
+                ],
+                *get_test_directives(instance),
+            ]
+        )
+    
     eval_commands = [
         "source /opt/miniconda3/bin/activate",
         f"conda activate {env_name}",
