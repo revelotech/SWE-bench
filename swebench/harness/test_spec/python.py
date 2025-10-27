@@ -476,22 +476,22 @@ def make_eval_script_list_py(
             ]
         )
     
+    # eval_commands = [
+    #     "source /opt/miniconda3/bin/activate",
+    #     f"conda activate {env_name}",
+    #     f"cd {repo_directory}",
+    #]
+    # if "eval_commands" in specs:
+    #     eval_commands = specs["eval_commands"]
     eval_commands = [
-        "source /opt/miniconda3/bin/activate",
-        f"conda activate {env_name}",
-        f"cd {repo_directory}",
-    ]
-    if "eval_commands" in specs:
-        eval_commands += specs["eval_commands"]
-    eval_commands += [
         f"git config --global --add safe.directory {repo_directory}",  # for nonroot user
         f"cd {repo_directory}",
         # This is just informational, so we have a record
         "git status",
         "git show",
         f"git -c core.fileMode=false diff {base_commit}",
-        "source /opt/miniconda3/bin/activate",
-        f"conda activate {env_name}",
+        # "source /opt/miniconda3/bin/activate",
+        # f"conda activate {env_name}",
     ]
     if "install" in specs:
         eval_commands.append(specs["install"])
