@@ -2,6 +2,7 @@ import os
 import posixpath
 import re
 import requests
+import shlex
 
 from swebench.harness.constants import (
     SWEbenchInstance,
@@ -371,6 +372,10 @@ def make_env_script_list_py(instance, specs, env_name) -> list:
     Creates the list of commands to set up the conda environment for testing.
     This is the setup script for the environment image.
     """
+    # If docker_image is provided, skip all environment setup
+    if instance.get("docker_image"):
+        return []
+    
     cached_environment_yml = load_cached_environment_yml(instance["instance_id"])
     if cached_environment_yml:
         return make_env_script_list_py_from_conda(
@@ -459,7 +464,7 @@ def make_eval_script_list_py(
         # Add test directives if they exist
         test_directives = get_test_directives(instance)
         if test_directives:
-            test_command += " " + " ".join(test_directives)
+            test_command += " " + " ".join(shlex.quote(test.strip()) for test in test_directives)
     else:
         # Fall back to the old method
         test_command = " ".join(

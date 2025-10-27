@@ -86,9 +86,9 @@ class TestSpec:
             val = hash_value[
                 :10
             ]  # 10 characters is still likely to be unique given only a few base images will be created
-            return f"sweb.base.{MAP_REPO_TO_EXT[self.repo]}.{self.arch}.{val}:{self.base_image_tag}"
+            return f"sweb.base.{MAP_REPO_TO_EXT.get(self.repo, 'py')}.{self.arch}.{val}:{self.base_image_tag}"
         return (
-            f"sweb.base.{MAP_REPO_TO_EXT[self.repo]}.{self.arch}:{self.base_image_tag}"
+            f"sweb.base.{MAP_REPO_TO_EXT.get(self.repo, 'py')}.{self.arch}:{self.base_image_tag}"
         )
 
     @property
@@ -106,7 +106,7 @@ class TestSpec:
         hash_object.update(hash_key.encode("utf-8"))
         hash_value = hash_object.hexdigest()
         val = hash_value[:22]  # 22 characters is still very likely to be unique
-        return f"sweb.env.{MAP_REPO_TO_EXT[self.repo]}.{self.arch}.{val}:{self.env_image_tag}"
+        return f"sweb.env.{MAP_REPO_TO_EXT.get(self.repo, 'py')}.{self.arch}.{val}:{self.env_image_tag}"
 
     @property
     def instance_image_key(self):
@@ -211,7 +211,7 @@ def make_test_spec(
 
     env_name = "testbed"
     repo_directory = f"/{env_name}"
-    specs = MAP_REPO_VERSION_TO_SPECS[repo][version]
+    specs = MAP_REPO_VERSION_TO_SPECS.get(repo, {}).get(version, {})
     docker_specs = specs.get("docker_specs", {})
 
     repo_script_list = make_repo_script_list(
@@ -239,7 +239,7 @@ def make_test_spec(
         arch=arch,
         FAIL_TO_PASS=fail_to_pass,
         PASS_TO_PASS=pass_to_pass,
-        language=MAP_REPO_TO_EXT[repo],
+        language=MAP_REPO_TO_EXT.get(repo, "py"),
         docker_specs=docker_specs,
         namespace=namespace,
         base_image_tag=base_image_tag,
