@@ -639,6 +639,7 @@ def build_container(
             command="tail -f /dev/null",
             platform=test_spec.platform,
             cap_add=cap_add,
+            network_mode="host",
         )
         logger.info(f"Container for {test_spec.instance_id} created: {container.id}")
         return container
