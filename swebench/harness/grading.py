@@ -61,8 +61,7 @@ def get_logs_eval(test_spec: TestSpec, log_fp: str) -> tuple[dict[str, str], boo
         if custom_log_parser:
             # Custom parser returns JSON string, convert to dict
             def custom_parser_wrapper(log_content: str, _: TestSpec) -> dict[str, str]:
-                json_result = custom_log_parser(log_content)
-                return json.loads(json_result)
+                return custom_log_parser(log_content)
             log_parser = custom_parser_wrapper
         else:
             # Fallback to hardcoded mapping if custom parser not found
