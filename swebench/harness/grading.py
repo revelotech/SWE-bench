@@ -57,7 +57,7 @@ def get_logs_eval(test_spec: TestSpec, log_fp: str) -> tuple[dict[str, str], boo
         import json
         exec_globals = {}
         exec(test_spec.parser_content, exec_globals)
-        custom_log_parser = exec_globals.get('parse_test_log')
+        custom_log_parser = exec_globals.get('parse')
         if custom_log_parser:
             # Custom parser returns JSON string, convert to dict
             def custom_parser_wrapper(log_content: str, _: TestSpec) -> dict[str, str]:
