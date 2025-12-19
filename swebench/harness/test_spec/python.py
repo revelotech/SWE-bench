@@ -385,11 +385,13 @@ def make_env_script_list_py(instance, specs, env_name) -> list:
     reqs_commands = [
         "source /opt/miniconda3/bin/activate",
     ]
+    # Get Python version from specs, instance, or use default
+    python_version = specs.get("python") or instance.get("python") or "3.13"
     # Create conda environment according to install instructinos
     pkgs = specs.get("packages", "")
     if pkgs == "requirements.txt":
         # Create environment
-        cmd = f"conda create -n {env_name} python={specs['python']} -y"
+        cmd = f"conda create -n {env_name} python={python_version} -y"
         reqs_commands.append(cmd)
 
         # Install dependencies
@@ -411,7 +413,7 @@ def make_env_script_list_py(instance, specs, env_name) -> list:
         if "no_use_env" in specs and specs["no_use_env"]:
             # `conda create` based installation
             cmd = (
-                f"conda create -c conda-forge -n {env_name} python={specs['python']} -y"
+                f"conda create -c conda-forge -n {env_name} python={python_version} -y"
             )
             reqs_commands.append(cmd)
 
@@ -423,14 +425,14 @@ def make_env_script_list_py(instance, specs, env_name) -> list:
             cmd = f"conda env create --file {path_to_reqs}"
             reqs_commands.append(cmd)
 
-            cmd = f"conda activate {env_name} && conda install python={specs['python']} -y"
+            cmd = f"conda activate {env_name} && conda install python={python_version} -y"
             reqs_commands.append(cmd)
 
         # Remove environment.yml
         reqs_commands.append(f"rm {path_to_reqs}")
     else:
         # Create environment + install dependencies
-        cmd = f"conda create -n {env_name} python={specs['python']} {pkgs} -y"
+        cmd = f"conda create -n {env_name} python={python_version} {pkgs} -y"
         reqs_commands.append(cmd)
 
     reqs_commands.append(f"conda activate {env_name}")
