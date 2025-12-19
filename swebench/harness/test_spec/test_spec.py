@@ -223,11 +223,17 @@ def make_test_spec(
     )
     
     # Extract custom docker fields if present
+    # Check both top-level and install_config for docker_image
     docker_image = instance.get("docker_image")
+    if not docker_image and "install_config" in instance:
+        docker_image = instance["install_config"].get("docker_image")
     dockerfile = instance.get("dockerfile") or instance.get("DockerFile")  # Handle both cases
     test_cmds = instance.get("test_cmds")
     log_parser = instance.get("log_parser")
     parser_content = instance.get("parser_content")
+    # Also check install_config for parser_content if not found at top level
+    if not parser_content and "install_config" in instance:
+        parser_content = instance["install_config"].get("parser_content")
     
     return TestSpec(
         instance_id=instance_id,
