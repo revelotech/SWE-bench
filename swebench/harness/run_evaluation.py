@@ -62,8 +62,8 @@ from swebench.harness.utils import (
 )
 
 GIT_APPLY_CMDS = [
-    "git apply --whitespace=fix --verbose",
-    "git apply --whitespace=fix --verbose --reject",
+    "git apply --verbose",
+    "git apply --verbose --reject",
     "patch --batch --fuzz=5 -p1 -i",
 ]
 
