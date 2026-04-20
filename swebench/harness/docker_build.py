@@ -3,6 +3,7 @@ from __future__ import annotations
 import docker
 import docker.errors
 import logging
+import subprocess
 import sys
 import traceback
 
@@ -510,33 +511,25 @@ def build_custom_instance_image(
     with open(dockerfile_path, "w") as f:
         f.write(dockerfile)
 
-    try:
-        # Build the image
-        logger.info(f"Building docker image {image_name} in {build_dir}")
-        response = client.api.build(
-            path=str(build_dir),
-            tag=image_name,
-            rm=True,
-            forcerm=True,
-            decode=True,
-            platform=test_spec.platform,
-            nocache=nocache,
-        )
+    # Map platform string to buildx-compatible format (linux/x86_64 -> linux/amd64)
+    buildx_platform = test_spec.platform.replace("linux/x86_64", "linux/amd64")
 
-        # Log the build process continuously
-        buildlog = ""
-        for chunk in response:
-            if "stream" in chunk:
-                # Remove ANSI escape sequences from the log
-                chunk_stream = ansi_escape(chunk["stream"])
-                logger.info(chunk_stream.strip())
-                buildlog += chunk_stream
-            elif "errorDetail" in chunk:
-                # Decode error message, raise BuildError
-                logger.error(f"Error: {ansi_escape(chunk['errorDetail']['message'])}")
-                raise docker.errors.BuildError(
-                    chunk["errorDetail"]["message"], buildlog
-                )
+    try:
+        cmd = [
+            "docker", "buildx", "build",
+            "--platform", buildx_platform,
+            "--load",
+            "-t", image_name,
+            str(build_dir),
+        ]
+        logger.info(f"Building docker image {image_name} via buildx: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.stdout:
+            logger.info(result.stdout)
+        if result.stderr:
+            logger.info(result.stderr)
+        if result.returncode != 0:
+            raise docker.errors.BuildError(result.stderr, result.stdout)
         logger.info("Custom image built successfully!")
     except docker.errors.BuildError as e:
         logger.error(f"docker.errors.BuildError during {image_name}: {e}")
@@ -603,14 +596,21 @@ def build_container(
         try:
             client.images.get(test_spec.instance_image_key)
         except docker.errors.ImageNotFound:
-            try:
-                client.images.pull(test_spec.instance_image_key)
-            except docker.errors.NotFound as e:
-                raise BuildImageError(test_spec.instance_id, str(e), logger) from e
-            except Exception as e:
-                raise Exception(
-                    f"Error occurred while pulling image {test_spec.base_image_key}: {str(e)}"
+            if test_spec.dockerfile:
+                logger.info(
+                    f"Image {test_spec.instance_image_key} not found locally, "
+                    f"building from custom dockerfile for {test_spec.instance_id}"
                 )
+                build_custom_instance_image(test_spec, client, logger, nocache)
+            else:
+                try:
+                    client.images.pull(test_spec.instance_image_key)
+                except docker.errors.NotFound as e:
+                    raise BuildImageError(test_spec.instance_id, str(e), logger) from e
+                except Exception as e:
+                    raise Exception(
+                        f"Error occurred while pulling image {test_spec.base_image_key}: {str(e)}"
+                    )
 
     container = None
     try:
