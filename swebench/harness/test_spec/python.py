@@ -2,6 +2,7 @@ import os
 import posixpath
 import re
 import requests
+import shlex
 
 from swebench.harness.constants import (
     SWEbenchInstance,
@@ -229,34 +230,70 @@ def get_requirements(instance: SWEbenchInstance) -> str:
 
 def get_test_directives(instance: SWEbenchInstance) -> list:
     """
-    Get test directives from the test_patch of a task instance
+    Get test directives from FAIL_TO_PASS and PASS_TO_PASS fields of a task instance
 
     Args:
         instance (dict): task instance
     Returns:
         directives (list): List of test directives
     """
+    import json
+    
     # For seq2seq code repos, testing command is fixed
     if instance["repo"] == "swe-bench/humaneval":
         return ["test.py"]
 
-    # Get test directives from test patch and remove non-test files
-    diff_pat = r"diff --git a/.* b/(.*)"
-    test_patch = instance["test_patch"]
-    directives = re.findall(diff_pat, test_patch)
-    directives = [
-        d for d in directives if not any(d.endswith(ext) for ext in NON_TEST_EXTS)
-    ]
+    # Get test directives from FAIL_TO_PASS and PASS_TO_PASS fields
+    directives = []
+    
+    # Helper function to parse test lists (handles both arrays and JSON strings)
+    def parse_test_list(test_field):
+        if not test_field:
+            return []
+        
+        # If it's already a list, return it
+        if isinstance(test_field, list):
+            return test_field
+        
+        # If it's a string, try to parse it as JSON
+        if isinstance(test_field, str):
+            try:
+                return json.loads(test_field)
+            except json.JSONDecodeError:
+                # If JSON parsing fails, treat as a single test name
+                return [test_field]
+        
+        return []
+    
+    # Add tests from FAIL_TO_PASS field
+    if "FAIL_TO_PASS" in instance:
+        fail_to_pass_tests = parse_test_list(instance["FAIL_TO_PASS"])
+        directives.extend(fail_to_pass_tests)
+    
+    # Add tests from PASS_TO_PASS field
+    if "PASS_TO_PASS" in instance:
+        pass_to_pass_tests = parse_test_list(instance["PASS_TO_PASS"])
+        directives.extend(pass_to_pass_tests)
+    
+    # If no tests found in the new fields, fall back to the old method
+    if not directives and "test_patch" in instance:
+        # Get test directives from test patch and remove non-test files
+        diff_pat = r"diff --git a/.* b/(.*)"
+        test_patch = instance["test_patch"]
+        directives = re.findall(diff_pat, test_patch)
+        directives = [
+            d for d in directives if not any(d.endswith(ext) for ext in NON_TEST_EXTS)
+        ]
 
-    # For Django tests, remove extension + "tests/" prefix and convert slashes to dots (module referencing)
-    if instance["repo"] == "django/django":
-        directives_transformed = []
-        for d in directives:
-            d = d[: -len(".py")] if d.endswith(".py") else d
-            d = d[len("tests/") :] if d.startswith("tests/") else d
-            d = d.replace("/", ".")
-            directives_transformed.append(d)
-        directives = directives_transformed
+        # For Django tests, remove extension + "tests/" prefix and convert slashes to dots (module referencing)
+        if instance["repo"] == "django/django":
+            directives_transformed = []
+            for d in directives:
+                d = d[: -len(".py")] if d.endswith(".py") else d
+                d = d[len("tests/") :] if d.startswith("tests/") else d
+                d = d.replace("/", ".")
+                directives_transformed.append(d)
+            directives = directives_transformed
 
     return directives
 
@@ -335,6 +372,10 @@ def make_env_script_list_py(instance, specs, env_name) -> list:
     Creates the list of commands to set up the conda environment for testing.
     This is the setup script for the environment image.
     """
+    # If docker_image is provided, skip all environment setup
+    if instance.get("docker_image"):
+        return []
+    
     cached_environment_yml = load_cached_environment_yml(instance["instance_id"])
     if cached_environment_yml:
         return make_env_script_list_py_from_conda(
@@ -344,11 +385,13 @@ def make_env_script_list_py(instance, specs, env_name) -> list:
     reqs_commands = [
         "source /opt/miniconda3/bin/activate",
     ]
+    # Get Python version from specs, instance, or use default
+    python_version = specs.get("python") or instance.get("python") or "3.13"
     # Create conda environment according to install instructinos
     pkgs = specs.get("packages", "")
     if pkgs == "requirements.txt":
         # Create environment
-        cmd = f"conda create -n {env_name} python={specs['python']} -y"
+        cmd = f"conda create -n {env_name} python={python_version} -y"
         reqs_commands.append(cmd)
 
         # Install dependencies
@@ -370,7 +413,7 @@ def make_env_script_list_py(instance, specs, env_name) -> list:
         if "no_use_env" in specs and specs["no_use_env"]:
             # `conda create` based installation
             cmd = (
-                f"conda create -c conda-forge -n {env_name} python={specs['python']} -y"
+                f"conda create -c conda-forge -n {env_name} python={python_version} -y"
             )
             reqs_commands.append(cmd)
 
@@ -382,14 +425,14 @@ def make_env_script_list_py(instance, specs, env_name) -> list:
             cmd = f"conda env create --file {path_to_reqs}"
             reqs_commands.append(cmd)
 
-            cmd = f"conda activate {env_name} && conda install python={specs['python']} -y"
+            cmd = f"conda activate {env_name} && conda install python={python_version} -y"
             reqs_commands.append(cmd)
 
         # Remove environment.yml
         reqs_commands.append(f"rm {path_to_reqs}")
     else:
         # Create environment + install dependencies
-        cmd = f"conda create -n {env_name} python={specs['python']} {pkgs} -y"
+        cmd = f"conda create -n {env_name} python={python_version} {pkgs} -y"
         reqs_commands.append(cmd)
 
     reqs_commands.append(f"conda activate {env_name}")
@@ -415,30 +458,42 @@ def make_eval_script_list_py(
     apply_test_patch_command = (
         f"git apply -v - <<'{HEREDOC_DELIMITER}'\n{test_patch}\n{HEREDOC_DELIMITER}"
     )
-    test_command = " ".join(
-        [
-            MAP_REPO_VERSION_TO_SPECS[instance["repo"]][instance["version"]][
-                "test_cmd"
-            ],
-            *get_test_directives(instance),
-        ]
-    )
+    
+    # Use test_cmds from the dataset entry if available, otherwise fall back to the old method
+    if "test_cmds" in instance and instance["test_cmds"]:
+        # Use the test command from the dataset entry - join all commands with &&
+        test_command = " && ".join(instance["test_cmds"])
+        # Add test directives if they exist
+        test_directives = get_test_directives(instance)
+        if test_directives:
+            test_command += " " + " ".join(shlex.quote(test.strip()) for test in test_directives)
+    else:
+        # Fall back to the old method
+        test_command = " ".join(
+            [
+                MAP_REPO_VERSION_TO_SPECS[instance["repo"]][instance["version"]][
+                    "test_cmd"
+                ],
+                *get_test_directives(instance),
+            ]
+        )
+    
+    # eval_commands = [
+    #     "source /opt/miniconda3/bin/activate",
+    #     f"conda activate {env_name}",
+    #     f"cd {repo_directory}",
+    #]
+    # if "eval_commands" in specs:
+    #     eval_commands = specs["eval_commands"]
     eval_commands = [
-        "source /opt/miniconda3/bin/activate",
-        f"conda activate {env_name}",
-        f"cd {repo_directory}",
-    ]
-    if "eval_commands" in specs:
-        eval_commands += specs["eval_commands"]
-    eval_commands += [
         f"git config --global --add safe.directory {repo_directory}",  # for nonroot user
         f"cd {repo_directory}",
         # This is just informational, so we have a record
         "git status",
         "git show",
         f"git -c core.fileMode=false diff {base_commit}",
-        "source /opt/miniconda3/bin/activate",
-        f"conda activate {env_name}",
+        # "source /opt/miniconda3/bin/activate",
+        # f"conda activate {env_name}",
     ]
     if "install" in specs:
         eval_commands.append(specs["install"])

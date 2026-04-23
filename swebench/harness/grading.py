@@ -50,10 +50,24 @@ def get_logs_eval(test_spec: TestSpec, log_fp: str) -> tuple[dict[str, str], boo
     """
     repo = test_spec.repo
     version = test_spec.version
-    log_parser = MAP_REPO_TO_PARSER[repo]
-    test_cmd = MAP_REPO_VERSION_TO_SPECS[repo][version]["test_cmd"]
-    if isinstance(test_cmd, list):
-        test_cmd = test_cmd[-1]
+
+    # Use custom parser from dataset entry if available, otherwise fall back to hardcoded mapping
+    if test_spec.parser_content:
+        # Execute the custom parser function
+        import json
+        exec_globals = {}
+        exec(test_spec.parser_content, exec_globals)
+        custom_log_parser = exec_globals.get('parse')
+        if custom_log_parser:
+            # Custom parser returns JSON string, convert to dict
+            def custom_parser_wrapper(log_content: str, _: TestSpec) -> dict[str, str]:
+                return custom_log_parser(log_content)
+            log_parser = custom_parser_wrapper
+        else:
+            # Fallback to hardcoded mapping if custom parser not found
+            log_parser = MAP_REPO_TO_PARSER[repo]
+    else:
+        log_parser = MAP_REPO_TO_PARSER[repo]
 
     with open(log_fp) as f:
         content = f.read()

@@ -45,6 +45,11 @@ class TestSpec:
     base_image_tag: str = LATEST
     env_image_tag: str = LATEST
     instance_image_tag: str = LATEST
+    docker_image: Optional[str] = None
+    dockerfile: Optional[str] = None
+    test_cmds: Optional[list[str]] = None
+    log_parser: Optional[str] = None
+    parser_content: Optional[str] = None
 
     @property
     def setup_env_script(self):
@@ -81,9 +86,9 @@ class TestSpec:
             val = hash_value[
                 :10
             ]  # 10 characters is still likely to be unique given only a few base images will be created
-            return f"sweb.base.{MAP_REPO_TO_EXT[self.repo]}.{self.arch}.{val}:{self.base_image_tag}"
+            return f"sweb.base.{MAP_REPO_TO_EXT.get(self.repo, 'py')}.{self.arch}.{val}:{self.base_image_tag}"
         return (
-            f"sweb.base.{MAP_REPO_TO_EXT[self.repo]}.{self.arch}:{self.base_image_tag}"
+            f"sweb.base.{MAP_REPO_TO_EXT.get(self.repo, 'py')}.{self.arch}:{self.base_image_tag}"
         )
 
     @property
@@ -101,7 +106,7 @@ class TestSpec:
         hash_object.update(hash_key.encode("utf-8"))
         hash_value = hash_object.hexdigest()
         val = hash_value[:22]  # 22 characters is still very likely to be unique
-        return f"sweb.env.{MAP_REPO_TO_EXT[self.repo]}.{self.arch}.{val}:{self.env_image_tag}"
+        return f"sweb.env.{MAP_REPO_TO_EXT.get(self.repo, 'py')}.{self.arch}.{val}:{self.env_image_tag}"
 
     @property
     def instance_image_key(self):
@@ -206,7 +211,7 @@ def make_test_spec(
 
     env_name = "testbed"
     repo_directory = f"/{env_name}"
-    specs = MAP_REPO_VERSION_TO_SPECS[repo][version]
+    specs = MAP_REPO_VERSION_TO_SPECS.get(repo, {}).get(version, {})
     docker_specs = specs.get("docker_specs", {})
 
     repo_script_list = make_repo_script_list(
@@ -216,6 +221,20 @@ def make_test_spec(
     eval_script_list = make_eval_script_list(
         instance, specs, env_name, repo_directory, base_commit, test_patch
     )
+    
+    # Extract custom docker fields if present
+    # Check both top-level and install_config for docker_image
+    docker_image = instance.get("docker_image")
+    if not docker_image and "install_config" in instance:
+        docker_image = instance["install_config"].get("docker_image")
+    dockerfile = instance.get("dockerfile") or instance.get("DockerFile")  # Handle both cases
+    test_cmds = instance.get("test_cmds")
+    log_parser = instance.get("log_parser")
+    parser_content = instance.get("parser_content")
+    # Also check install_config for parser_content if not found at top level
+    if not parser_content and "install_config" in instance:
+        parser_content = instance["install_config"].get("parser_content")
+    
     return TestSpec(
         instance_id=instance_id,
         repo=repo,
@@ -226,10 +245,15 @@ def make_test_spec(
         arch=arch,
         FAIL_TO_PASS=fail_to_pass,
         PASS_TO_PASS=pass_to_pass,
-        language=MAP_REPO_TO_EXT[repo],
+        language=MAP_REPO_TO_EXT.get(repo, "py"),
         docker_specs=docker_specs,
         namespace=namespace,
         base_image_tag=base_image_tag,
         env_image_tag=env_image_tag,
         instance_image_tag=instance_image_tag,
+        docker_image=docker_image,
+        dockerfile=dockerfile,
+        test_cmds=test_cmds,
+        log_parser=log_parser,
+        parser_content=parser_content,
     )
