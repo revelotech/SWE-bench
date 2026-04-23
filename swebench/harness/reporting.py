@@ -104,7 +104,15 @@ def make_run_report(
             image_name = spec.instance_image_key
             if image_name in images:
                 unremoved_images.add(image_name)
-        containers = client.containers.list(all=True)
+        try:
+            # Avoid failing report generation if a container vanishes mid-list.
+            containers = client.containers.list(all=True, ignore_removed=True)
+        except TypeError:
+            # Backward compatibility with older docker SDKs lacking ignore_removed.
+            try:
+                containers = client.containers.list(all=True)
+            except docker.errors.NotFound:
+                containers = []
         for container in containers:
             if run_id in container.name:
                 unstopped_containers.add(container.name)
